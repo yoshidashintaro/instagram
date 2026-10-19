@@ -5,7 +5,7 @@ export const WEEKDAYS = ['月', '火', '水', '木', '金', '土', '日'];
 /** 日次データが持つ指標。CSV 取り込み・マージ・補完はすべてこの一覧を基準にする */
 export const DAILY_FIELDS = [
   'followers', 'netChange', 'follows', 'unfollows',
-  'reach', 'nonFollowerReach', 'views', 'profileVisits', 'linkClicks', 'interactions', 'engagedAccounts',
+  'reach', 'nonFollowerReach', 'views', 'viewers', 'profileVisits', 'linkClicks', 'interactions', 'engagedAccounts',
 ];
 
 export const DAILY_LABELS = {
@@ -15,6 +15,8 @@ export const DAILY_LABELS = {
   unfollows: 'フォロー解除',
   reach: 'リーチ',
   views: 'ビュー',
+  // Meta の「Viewers」。ビュー（延べ回数）と違い、その日に見た人数。日をまたぐと同じ人が重複する
+  viewers: '閲覧者数',
   profileVisits: 'プロフィールアクセス',
   linkClicks: 'リンククリック',
   interactions: 'コンテンツインタラクション',
@@ -633,7 +635,7 @@ const slotLabel = (c) => `${WEEKDAYS[c.weekday]}曜 ${c.startHour}〜${c.endHour
 /**
  * @param si ソーシャルインサイト由来の追加データ（ストーリーズ・面別の内訳）。無ければ省略可
  */
-export function generateInsights({ summary, prevSummary, types, heatmap, hours, hashtags, posts, steps = [], audience = null, accounts = [], si = null, search = null }) {
+export function generateInsights({ summary, prevSummary, types, heatmap, hours, hashtags, posts, steps = [], audience = null, accounts = [], si = null, search = null, formats = null }) {
   const out = [];
 
   if (summary.followerChange !== null) {
@@ -819,6 +821,56 @@ export function generateInsights({ summary, prevSummary, types, heatmap, hours, 
       title: `プロフィールからのフォロー転換率 ${fmtPct(conv, 1)}`,
       text: `プロフィールアクセス ${si.totals.profileVisits.toLocaleString('ja-JP')}件に対し、新規フォローは ${(si.totals.follows ?? 0).toLocaleString('ja-JP')}件。プロフィール文・ハイライト・固定投稿が「何のアカウントか」を伝えられているかの指標です。`,
     });
+  }
+
+  // 閲覧者数（Viewers）とビュー（延べ回数）の関係
+  const viewerTotal = summary.totals?.viewers ?? null;
+  const viewTotal = summary.totals?.views ?? null;
+  if (viewerTotal) {
+    const perViewer = viewTotal ? viewTotal / viewerTotal : null;
+    out.push({
+      level: 'info',
+      title: `閲覧した人数は延べ ${n(viewerTotal)}人`,
+      text:
+        `期間中にコンテンツを見た人数の合計です（日ごとの人数を足した延べ人数なので、同じ人が複数日に含まれます）。` +
+        `${perViewer ? `ビューは ${n(viewTotal)}回なので、1人あたり ${perViewer.toFixed(1)}回見ている計算です。` : ''}`,
+    });
+  }
+
+  // 形式別の内訳（Top content formats）
+  const fmtViews = formats?.views || [];
+  if (fmtViews.length >= 2) {
+    const total = fmtViews.reduce((s2, r) => s2 + r.value, 0);
+    const top = [...fmtViews].sort((a, b) => b.value - a.value)[0];
+    if (total && top.value) {
+      const share = (top.value / total) * 100;
+      out.push({
+        level: share >= 70 ? 'warn' : 'info',
+        title: `ビューの ${fmtPct(share, 0)} は「${top.label}」形式`,
+        text:
+          `書き出した期間の ${n(total)}ビューのうち ${n(top.value)}ビューがこの形式です。` +
+          `${share >= 70 ? '1つの形式に偏っているため、他の形式の数字は母数が小さく、比較するときは注意してください。' : '形式ごとの投稿数と合わせて、伸ばす形式を決める材料になります。'}`,
+      });
+    }
+  }
+  // 形式ごとの反応率（ビューあたりの反応数）
+  const fmtActs = formats?.interactions || [];
+  if (fmtActs.length && fmtViews.length) {
+    const rates = fmtActs
+      .map((a) => {
+        const v2 = fmtViews.find((x) => x.key === a.key)?.value ?? null;
+        return v2 ? { label: a.label, rate: (a.value / v2) * 100, acts: a.value, views: v2 } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.rate - a.rate);
+    if (rates.length >= 2) {
+      const [best, worst] = [rates[0], rates.at(-1)];
+      out.push({
+        level: 'info',
+        title: `反応率が高い形式は「${best.label}」`,
+        text: `ビュー ${n(best.views)}回に対し反応 ${n(best.acts)}件（${fmtPct(best.rate, 3)}）。一方「${worst.label}」は ${fmtPct(worst.rate, 3)} で、見られた回数のわりに反応が付いていません。`,
+      });
+    }
   }
 
   // Google 検索（Search Console）

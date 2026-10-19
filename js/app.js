@@ -8,7 +8,7 @@ import {
 import * as charts from './charts.js';
 import { fmtInt, fmtPct, fmtCompact } from './charts.js';
 import { generateDemo } from './data/demo.js';
-import { importCSV, toCSV, decodeCSV, describeImport, parseCSV, looksGarbled } from './data/csv.js';
+import { importCSV, toCSV, decodeCSV, describeImport, parseCSV, looksGarbled, mergeContentFormats } from './data/csv.js';
 import { readWorkbook, isXlsxName } from './data/xlsx.js';
 import { importGA4Workbook, readGA4Table, mergeGA4, propertyFromFileName, primaryRows, campaignRows, isInstagram } from './data/ga4.js';
 import {
@@ -25,7 +25,10 @@ import {
   sliceByDate, surfaceBreakdown, clickBreakdown, accountTotals,
   hashtagSets, benchmarkSummary, taggedInPeriod,
 } from './account.js';
-import { readReachBreakdown, mergeReachBreakdown, applyNonFollowerEstimate, describeBreakdowns } from './data/reachMix.js';
+import { readReachBreakdown, mergeReachBreakdown, applyNonFollowerEstimate, describeBreakdowns, breakdownFor, soleAccount } from './data/reachMix.js';
+import {
+  KPI_DEFS, DAYS_PER_MONTH, kpiValues, kpiRows, kpiByStage, stageFunnel, kpiInsights, periodDays,
+} from './kpi.js';
 import { readSocialInsight, mergeHashtags, mergeFollowed, mergeSummary, mergeStories, mergeTagged, describeSocialInsight } from './data/socialInsight.js';
 import {
   readSearchConsoleZip, readSearchConsoleCSV, mergeSearchConsole, describeSearchConsole,
@@ -49,6 +52,8 @@ const DEFAULTS = {
   postMetrics: ['likes', 'saves'], postMode: 'total',
   // Search Console：見るプロパティと検索クエリの並べ替え
   searchScope: 'instagram', searchSort: 'clicks',
+  // KPI の基準・目標の上書き（{ 指標キー: { baseline, target } }）
+  kpiGoals: {},
 };
 const state = {
   dataset: store.loadDataset(),
@@ -59,6 +64,7 @@ const state = {
   // ?trend=指標 で開いたときは、その指標の推移ページを表示する
   trend: trendMetric(new URLSearchParams(location.search).get('trend'))?.key || null,
   openPost: null, // 推移ダイアログで開いている投稿
+  kpiEdit: false, // KPI の基準・目標を編集中か
 };
 
 function persistSettings() {
@@ -140,7 +146,9 @@ function baseData() {
   // 1つのエクスポートに複数アカウントが入っていることがあるので絞り込めるようにする
   const accounts = accountsOf(enriched);
   // 非フォロワーへのリーチの実数が無い投稿・日は、取り込んだリーチ内訳の比率から推定する
-  const mainAccount = ds.account?.username || accounts[0]?.username || '';
+  // 日次データ（アカウント全体の数字）の持ち主。投稿に別アカウントが混ざっていても、
+  // リーチ内訳が1アカウントぶんだけならそれを優先する（取り違えると推定が走らない）
+  const mainAccount = ds.account?.username || soleAccount(ds.reachBreakdown) || accounts[0]?.username || '';
   const est = applyNonFollowerEstimate({ posts: enriched, daily: rawDaily }, ds.reachBreakdown, mainAccount);
   const daily = est.daily;
   const account = accounts.some((a) => a.username === state.settings.account) ? state.settings.account : '';
@@ -149,7 +157,7 @@ function baseData() {
   const searchIdx = searchPostIndex(searchProps);
   const all = searchIdx.size ? est.posts.map((p) => withSearchMetrics(p, searchIdx)) : est.posts;
   const posts = account ? all.filter((p) => p.account === account) : all;
-  return { ds, daily, all, accounts, account, posts, nonFollowerEstimated: est.estimated, searchProps, searchIdx };
+  return { ds, daily, all, accounts, account, posts, nonFollowerEstimated: est.estimated, searchProps, searchIdx, mainAccount };
 }
 
 /** 投稿に Google 検索での表示回数・クリック・掲載順位を付ける（データが無ければ null） */
@@ -170,7 +178,7 @@ function postHistoryRows() {
 
 function compute() {
   const { days } = state.settings;
-  const { ds, daily, all, accounts, account, posts, nonFollowerEstimated } = baseData();
+  const { ds, daily, all, accounts, account, posts, nonFollowerEstimated, mainAccount } = baseData();
   const followerMode = ds.followerMode || detectFollowerMode(daily);
 
   const { startKey, endKey } = periodBounds(daily, posts, days || null);
@@ -236,7 +244,23 @@ function compute() {
   const insights = generateInsights({
     summary, prevSummary, types, heatmap, hours, hashtags, posts: cur.posts,
     steps, audience, accounts: account ? [] : accountStats, si, search,
+    formats: ds.contentFormats || null,
   });
+
+  // KPI ツリー（運用で決めた定義・基準・目標に対する進捗）
+  const periodLength = periodDays(startKey, endKey);
+  // 期間の終わりに当たるリーチ内訳（オーガニック／広告の実数が入っていれば使う）
+  const reachRow = breakdownFor(ds.reachBreakdown, account || mainAccount, endKey);
+  const kpiInput = { summary, posts: cur.posts, daily: cur.daily, traffic, si, reach: reachRow };
+  const kpi = {
+    days: periodLength,
+    values: kpiValues(kpiInput),
+    funnel: stageFunnel(kpiInput),
+    rows: [],
+  };
+  kpi.rows = kpiRows(kpi.values, periodLength, state.settings.kpiGoals);
+  // 目標に対する進捗は最初に読んでほしいので、自動分析レポートの先頭に置く
+  insights.unshift(...kpiInsights(kpi.rows, { days: periodLength }));
 
   const postHistory = postHistoryRows();
   return {
@@ -244,6 +268,7 @@ function compute() {
     types, heatmap, hours, weekdays, hashtags, insights,
     steps, audience, accounts, accountStats, account, followerMode, traffic, hp, prevHp, nonFollowerEstimated, si,
     all, postHistory, historyIdx: historyIndex(postHistory), historyStatus: historyStatus(postHistory), search,
+    formats: ds.contentFormats || null, kpi,
   };
 }
 
@@ -321,6 +346,7 @@ function render() {
   renderWarnings(v);
   renderKPIs(v);
   renderHpKPIs(v);
+  renderKpi(v);
   renderInsights(v);
   renderFollowerCharts(v);
   renderActivity(v);
@@ -658,6 +684,148 @@ function setEmpty(canvasId, empty, msg = 'この期間のデータがありま�
   return empty;
 }
 
+// ---------- KPI ツリー ----------
+
+const KPI_STATUS_LABELS = { reached: '目標達成', onTrack: '基準以上', behind: '基準割れ', none: 'データなし' };
+const KPI_STAGE_LABELS = { kgi: 'KGI', see: '見る（認知）', keep: '残す（興味）', connect: 'つながる（関係化）', bridge: 'HPへ（橋渡し）' };
+
+/** KPI の値の表示（率は % 、それ以外は整数＋単位） */
+const fmtKpi = (row, value) => {
+  if (value === null || value === undefined) return '–';
+  if (row.unit === '%') return `${value.toFixed(row.digits ?? 1)}%`;
+  const digits = row.digits ?? 0;
+  return `${digits ? value.toFixed(digits) : Math.round(value).toLocaleString('ja-JP')}${row.unit}`;
+};
+
+function renderKpi(v) {
+  const rows = v.kpi.rows;
+  const days = v.kpi.days;
+  $('#kpi-lead').textContent =
+    `運用で決めた指標の定義・基準・目標に対する進捗です。期間の合計を「月あたり」に直して比べています` +
+    `（いまの期間は ${days}日間 → ${DAYS_PER_MONTH.toFixed(1)}日ぶんに換算）。率の指標は換算しません。`;
+
+  // --- KGI ---
+  const kgi = rows.find((r) => r.stage === 'kgi');
+  const box = $('#kpi-kgi');
+  if (!kgi || kgi.monthly === null) {
+    box.replaceChildren(el('p', { className: 'sub', textContent: '保存数とフォロワー純増のデータが必要です' }));
+  } else {
+    box.replaceChildren(
+      el('div', { className: 'kgi-box' },
+        el('div', { className: 'kgi-value' }, fmtKpi(kgi, kgi.monthly), el('span', { className: 'kgi-unit', textContent: '／月' })),
+        el('p', {
+          className: 'kgi-sub',
+          textContent: `基準 ${fmtKpi(kgi, kgi.baseline)} ・ 目標 ${fmtKpi(kgi, kgi.target)}${kgi.progress === null ? '' : `（達成率 ${Math.round(kgi.progress)}%）`}`,
+        }),
+        el('p', { className: 'kgi-sub', textContent: `内訳：保存 ${fmtKpi(kgi, monthlyOf(rows, 'saves'))} ＋ 純増 ${fmtKpi(kgi, monthlyOf(rows, 'netFollowers'))}` }),
+      ),
+      goalBar(kgi),
+    );
+  }
+
+  // --- 4段階のファネル ---
+  $('#kpi-funnel').replaceChildren(
+    ...v.kpi.funnel.map((s) =>
+      el('li', {},
+        el('span', { className: 'st-name', textContent: s.label }),
+        el('span', { className: 'st-value', textContent: s.value === null ? '–' : `${Math.round(s.value).toLocaleString('ja-JP')}${s.unit}` }),
+        el('span', { className: 'st-metric', textContent: s.metric }),
+        el('span', {
+          className: 'st-rate',
+          textContent: s.rate === null ? '' : `${s.fromLabel}の ${fmtPct(s.rate, 1)}`,
+          title: s.rateIsLanding ? 'リンククリックのうち、実際に HP へ着地したセッションの割合' : '',
+        }),
+        s.note ? el('span', { className: 'st-note', textContent: s.note }) : null,
+      ),
+    ),
+  );
+
+  renderKpiTable(rows);
+}
+
+const monthlyOf = (rows, key) => rows.find((r) => r.key === key)?.monthly ?? null;
+
+function goalBar(row) {
+  const bar = el('span', { className: `goal-bar ${row.status === 'reached' ? 'reached' : row.status === 'behind' ? 'behind' : ''}` });
+  const pct = row.progress === null ? (row.status === 'reached' ? 100 : 0) : Math.max(0, Math.min(100, row.progress));
+  bar.append(el('span', {}));
+  bar.firstChild.style.width = `${pct}%`;
+  bar.title = row.progress === null ? '「維持」が目標の指標です' : `達成率 ${Math.round(row.progress)}%`;
+  return bar;
+}
+
+function renderKpiTable(rows) {
+  const editing = state.kpiEdit;
+  $('#kpi-edit').setAttribute('aria-pressed', String(editing));
+  $('#kpi-edit').textContent = editing ? '編集を終える' : '基準・目標を編集';
+  $('#kpi-table-sub').textContent = editing
+    ? '基準・目標の欄に数値を入れると、その場で進捗を計算し直します（このブラウザに保存されます）'
+    : '月あたりに換算した実績と、基準・目標に対する進捗';
+  $('#kpi-note').textContent =
+    '「維持」が目標の指標は、基準を下回らなければ達成とみなします。'
+    + 'データが取り込まれていない指標は「データなし」と表示します。';
+
+  const table = $('#kpi-table');
+  table.querySelector('thead').replaceChildren(
+    el('tr', {},
+      el('th', { textContent: '指標' }),
+      el('th', { textContent: '定義' }),
+      el('th', { className: 'num', textContent: '実績（月あたり）' }),
+      el('th', { className: 'num', textContent: '基準' }),
+      el('th', { className: 'num', textContent: '目標' }),
+      el('th', { className: 'num', textContent: '進捗' }),
+      el('th', { textContent: '取得元' }),
+    ),
+  );
+
+  const body = [];
+  for (const group of kpiByStage(rows)) {
+    const head = el('tr', { className: 'kpi-stage-row' });
+    const td = head.insertCell();
+    td.colSpan = 7;
+    td.textContent = `${group.label}　${group.note}`;
+    body.push(head);
+    for (const r of group.rows) body.push(kpiRowEl(r, editing));
+  }
+  table.querySelector('tbody').replaceChildren(...body);
+}
+
+function kpiRowEl(r, editing) {
+  const goalCell = (field) => {
+    const td = el('td', { className: 'num' });
+    if (!editing) {
+      td.textContent = fmtKpi(r, r[field]);
+      if (field === 'target' && r.targetNote) td.title = r.targetNote;
+      return td;
+    }
+    const input = el('input', { type: 'number', value: String(r[field]), step: r.unit === '%' ? '0.1' : '1', min: '0' });
+    input.dataset.kpi = r.key;
+    input.dataset.field = field;
+    input.setAttribute('aria-label', `${r.label}の${field === 'baseline' ? '基準' : '目標'}`);
+    td.append(input);
+    return td;
+  };
+
+  const progress = el('td', { className: 'num' },
+    el('span', { className: `kpi-status ${r.status}`, textContent: KPI_STATUS_LABELS[r.status] }),
+    r.status === 'none' ? null : goalBar(r),
+  );
+
+  const name = el('td', {}, el('strong', { textContent: r.label }));
+  if (r.note) name.append(el('p', { className: 'sub', textContent: r.note }));
+  if (r.targetNote) name.append(el('p', { className: 'sub', textContent: `目標の考え方：${r.targetNote}` }));
+
+  return el('tr', {},
+    name,
+    el('td', { textContent: r.def }),
+    el('td', { className: 'num', textContent: fmtKpi(r, r.monthly), title: r.perMonth && r.raw !== null ? `期間の合計 ${fmtKpi(r, r.raw)}` : '' }),
+    goalCell('baseline'),
+    goalCell('target'),
+    progress,
+    el('td', { textContent: r.source }),
+  );
+}
+
 function renderFollowerCharts(v) {
   const mode = v.followerMode;
   $('#net-title').textContent = mode === 'gains' ? '日次の新規フォロー数' : '日次の純増減（フォロー − フォロー解除）';
@@ -675,6 +843,8 @@ function renderActivity(v) {
     { key: 'reach', label: 'リーチ' },
     { key: 'nonFollowerReach', label: v.daily.some((d) => d.nonFollowerEstimated) ? 'フォロワー以外へのリーチ（推定）' : 'フォロワー以外へのリーチ', sameAxis: true },
     { key: 'views', label: 'ビュー' },
+    // Viewers はビュー（延べ回数）と違い「見た人数」。リーチと比べられるよう同じ軸に置く
+    { key: 'viewers', label: '閲覧者数', sameAxis: true },
   ].filter((s) => has(s.key));
   const trafficSeries = [
     { key: 'profileVisits', label: 'プロフィールアクセス' },
@@ -682,7 +852,7 @@ function renderActivity(v) {
     { key: 'interactions', label: 'コンテンツインタラクション' },
   ].filter((s) => has(s.key));
 
-  const show = reachSeries.length || trafficSeries.length || v.steps.length;
+  const show = reachSeries.length || trafficSeries.length || v.steps.length || v.formats;
   $('#activity-block').hidden = !show;
   if (!show) return;
 
@@ -736,6 +906,63 @@ function renderBreakdown(v) {
   if (clicks.length && !setEmpty('c-clicks', false)) {
     charts.hBar('c-clicks', clicks.map((c) => ({ label: c.label, value: c.value })), { name: '件' });
   }
+
+  renderFormats(v.formats);
+}
+
+/**
+ * Meta の「Top content formats」。日付を持たない期間合計なので、
+ * 期間フィルタとは無関係に「書き出した内容そのまま」を出す。
+ */
+function renderFormats(formats) {
+  const row = $('#formats-row');
+  row.hidden = !formats;
+  if (!formats) return;
+
+  const views = formats.views || [];
+  const totalViews = views.reduce((s, r) => s + r.value, 0);
+  $('#formats-sub').textContent = totalViews
+    ? `書き出した期間の合計 ${fmtInt(totalViews)}ビュー（期間フィルタの対象外）`
+    : '書き出した期間の合計（期間フィルタの対象外）';
+  if (!setEmpty('c-formats-views', !views.length, 'ビューの内訳がありません')) {
+    charts.hBar(
+      'c-formats-views',
+      [...views].sort((a, b) => b.value - a.value).map((r) => ({
+        label: r.label,
+        value: r.value,
+        sub: totalViews ? `全体の ${((r.value / totalViews) * 100).toFixed(1)}%` : '',
+      })),
+      { name: 'ビュー' },
+    );
+  }
+
+  // 投稿数・ビュー・反応数を形式ごとに1つの表にまとめる
+  const keys = [...new Set(['published', 'views', 'interactions'].flatMap((k) => (formats[k] || []).map((r) => r.key)))];
+  const labelOf = (key) => ['published', 'views', 'interactions'].map((k) => (formats[k] || []).find((r) => r.key === key)?.label).find(Boolean) || key;
+  const valueOf = (k, key) => (formats[k] || []).find((r) => r.key === key)?.value ?? null;
+  const table = $('#formats-table');
+  table.querySelector('thead').replaceChildren(
+    el('tr', {},
+      el('th', { textContent: '形式' }),
+      el('th', { className: 'num', textContent: '投稿数' }),
+      el('th', { className: 'num', textContent: 'ビュー' }),
+      el('th', { className: 'num', textContent: '反応数' }),
+      el('th', { className: 'num', textContent: '反応率', title: '反応数 ÷ ビュー' }),
+    ),
+  );
+  table.querySelector('tbody').replaceChildren(
+    ...keys.map((key) => {
+      const v2 = valueOf('views', key);
+      const i2 = valueOf('interactions', key);
+      return el('tr', {},
+        el('td', { textContent: labelOf(key) }),
+        el('td', { className: 'num', textContent: fmtInt(valueOf('published', key)) }),
+        el('td', { className: 'num', textContent: fmtInt(v2) }),
+        el('td', { className: 'num', textContent: fmtInt(i2) }),
+        el('td', { className: 'num', textContent: v2 && i2 !== null ? fmtPct((i2 / v2) * 100, 3) : '–' }),
+      );
+    }),
+  );
 }
 
 /** ストーリーズ：日ごとの推移・時間帯別の閲覧率・見た人のその後・一覧 */
@@ -1765,6 +1992,7 @@ async function handleCSVFiles(files) {
   // 取り込み直すときも履歴は残す：過去の時点の数字は他のどこからも復元できない
   let postHistory = state.dataset?.postHistory || [];
   let searchConsole = merge ? state.dataset.searchConsole || [] : [];
+  let contentFormats = merge ? state.dataset.contentFormats || null : null;
   // ZIP を使わず CSV を 1 枚ずつ読み込んだとき用（プロパティごとにまとめ直す）
   const looseSearch = new Map();
   // 投稿・日次を含まない補助データ（リーチ内訳・ハッシュタグ分析・フォロー中アカウント）だけの取り込みか
@@ -1855,6 +2083,11 @@ async function handleCSVFiles(files) {
       if (res.posts.length) posts = store.mergePosts(posts, res.posts);
       if (res.daily.length) daily = store.mergeDaily(daily, res.daily);
       if (res.audience) audience = store.mergeAudience(audience, res.audience);
+      if (res.contentFormats) {
+        contentFormats = mergeContentFormats(contentFormats, res.contentFormats);
+        // 形式別の内訳だけのファイル（日付も投稿も無い）は補助データとして扱う
+        if (!res.posts.length && !res.daily.length && !res.audience) sideFiles++;
+      }
       notes.push(...res.notes);
       done.push(`${f.name}: ${describeImport(res)}`);
     } catch (e) {
@@ -1892,6 +2125,7 @@ async function handleCSVFiles(files) {
         tagged: mergeTagged(state.dataset.tagged || [], tagged),
         postHistory: state.dataset.postHistory || [],
         searchConsole: mergeSearchConsole(state.dataset.searchConsole || [], searchConsole),
+        contentFormats: mergeContentFormats(state.dataset.contentFormats, contentFormats),
       },
       '補助データ（リーチ内訳・ハッシュタグ分析など）を取り込みました',
     );
@@ -1918,6 +2152,7 @@ async function handleCSVFiles(files) {
       // 投稿一覧から消えた投稿の履歴は捨て、保存容量に収まる分だけ残す
       postHistory: pruneHistory(postHistory, posts),
       searchConsole,
+      contentFormats,
       followerMode: detectFollowerMode(normalized),
       fetchedAt: new Date().toISOString(),
     },
@@ -1968,6 +2203,7 @@ async function handleAPISubmit(e) {
     if (prev?.stories?.length) dataset.stories = prev.stories;
     if (prev?.tagged?.length) dataset.tagged = prev.tagged;
     if (prev?.searchConsole?.length) dataset.searchConsole = prev.searchConsole;
+    if (prev?.contentFormats) dataset.contentFormats = prev.contentFormats;
     dataset.warnings = warnings;
     setDataset(dataset, `@${dataset.account.username} のデータを取得しました`);
     status.textContent = `完了：投稿 ${dataset.posts.length}件 ・ 日次 ${dataset.daily.length}日分`;
@@ -2123,6 +2359,42 @@ function bindEvents() {
     persistSettings();
     render();
   });
+  // KPI ツリー
+  $('#kpi-edit').addEventListener('click', () => {
+    state.kpiEdit = !state.kpiEdit;
+    renderKpiTable(state.view.kpi.rows);
+  });
+  $('#kpi-table').addEventListener('change', (e) => {
+    const input = e.target.closest('input[data-kpi]');
+    if (!input) return;
+    const { kpi: key, field } = input.dataset;
+    const value = Number(input.value);
+    if (!Number.isFinite(value)) return;
+    const goals = { ...state.settings.kpiGoals, [key]: { ...(state.settings.kpiGoals[key] || {}), [field]: value } };
+    state.settings.kpiGoals = goals;
+    persistSettings();
+    render();
+  });
+  $('#export-kpi').addEventListener('click', () => {
+    const rows = state.view?.kpi?.rows || [];
+    if (!rows.length) return toast('書き出せる KPI がありません');
+    const n = (r, v) => (v === null || v === undefined ? '' : r.unit === '%' ? v.toFixed(r.digits ?? 1) : Math.round(v));
+    const cols = [
+      { label: '区分', get: (r) => KPI_STAGE_LABELS[r.stage] || r.stage },
+      { label: '指標', get: (r) => r.label },
+      { label: '定義', get: (r) => r.def },
+      { label: '期間の実績', get: (r) => n(r, r.raw) },
+      { label: '月あたりの実績', get: (r) => n(r, r.monthly) },
+      { label: '基準（月あたり）', get: (r) => n(r, r.baseline) },
+      { label: '目標（月あたり）', get: (r) => n(r, r.target) },
+      { label: '単位', get: (r) => r.unit || '件' },
+      { label: '達成率(%)', get: (r) => (r.progress === null ? '' : Math.round(r.progress)) },
+      { label: '状態', get: (r) => KPI_STATUS_LABELS[r.status] },
+      { label: '取得元', get: (r) => r.source },
+    ];
+    download(`kpi_${state.view.startKey}_${state.view.endKey}.csv`, toCSV(rows, cols), 'text/csv');
+  });
+
   // Google 検索（Search Console）
   $('#search-scope').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-scope]');

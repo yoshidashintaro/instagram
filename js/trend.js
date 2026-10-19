@@ -21,6 +21,7 @@ export const TREND_METRICS = [
   { key: 'reach', group: 'Instagram', label: '平均リーチ／投稿', source: 'posts', agg: 'mean', field: 'reach', chart: 'line', def: 'その期間に投稿した投稿のリーチの平均' },
   { key: 'nonFollowerReach', group: 'Instagram', label: '非フォロワーの平均リーチ／投稿', source: 'posts', agg: 'mean', field: 'nonFollowerReach', chart: 'line', def: 'その期間に投稿した投稿の、フォロワー以外へのリーチの平均（実数が無い投稿は、リーチ内訳の比率による推定値）' },
   { key: 'interactions', group: 'Instagram', label: '平均反応数／投稿', source: 'posts', agg: 'mean', field: 'interactions', chart: 'line', def: 'その期間に投稿した投稿の反応数（いいね＋コメント＋保存＋シェア）の平均' },
+  { key: 'viewers', group: 'Instagram', label: '閲覧者数（延べ）', source: 'daily', agg: 'sum', field: 'viewers', chart: 'bar', def: '日次の閲覧者数（Meta の Viewers：その日に見た人数）の合計。日をまたぐと同じ人が重複するため「延べ」の人数です' },
   { key: 'profileVisits', group: 'Instagram', label: 'プロフィールアクセス', source: 'daily', agg: 'sum', field: 'profileVisits', chart: 'bar', def: '日次のプロフィールアクセスの合計' },
   { key: 'linkClicks', group: 'Instagram', label: 'リンククリック', source: 'daily', agg: 'sum', field: 'linkClicks', chart: 'bar', def: '日次のリンククリックの合計' },
   { key: 'hpUsers', group: 'HP流入（GA4）', label: '流入数（UU数）', source: 'ga4', agg: 'sum', field: 'users', chart: 'bar', def: 'Instagram からの流入のユーザー数の合計（日ごと・参照元ごとの合計）' },

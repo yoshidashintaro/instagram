@@ -114,6 +114,8 @@ const ALIASES = {
   shares: ['shares', 'シェア', 'シェア数'],
   reach: ['reach', 'リーチ', 'リーチ数', 'accountsreached', 'リーチしたアカウント数'],
   views: ['views', 'plays', 'impressions', '閲覧数', '再生数', 'ビュー', 'ビュー数', 'インプレッション', 'インプレッション数'],
+  // Viewers（見た人数）。Views（延べ回数）とは別の指標なので混ぜない
+  viewers: ['viewers', 'uniqueviewers', '閲覧者', '閲覧者数', '視聴者', '視聴者数', 'ビューした人数'],
   date: ['date', '日付', 'day', '日'],
   followers: ['followers', 'followerscount', 'フォロワー', 'フォロワー数', 'フォロワー総数', 'totalfollowers'],
   netChange: ['netchange', 'net', '純増', '純増数', '増減', 'フォロワー増減', 'netfollowers'],
@@ -135,6 +137,7 @@ const ALIASES = {
 const SECTION_METRICS = {
   reach: ['reach', 'リーチ', 'accountsreached', 'リーチしたアカウント数', 'instagramreach'],
   views: ['views', 'ビュー', 'ビュー数', '表示回数', '閲覧数', 'impressions', 'インプレッション', 'instagramviews'],
+  viewers: ['viewers', 'instagramviewers', '閲覧者', '閲覧者数', '視聴者', '視聴者数'],
   follows: ['instagramfollows', 'follows', 'フォロー', 'フォロー数', 'instagramのフォロー', '新規フォロワー', 'netfollows'],
   unfollows: ['instagramunfollows', 'unfollows', 'フォロー解除', 'フォロー解除数'],
   followers: ['instagramfollowers', 'followers', 'フォロワー', 'フォロワー数', 'totalfollowers', 'フォロワーの推移'],
@@ -325,6 +328,58 @@ const headIs = (cell, list) => list.some((a) => norm(a) === norm(cell));
  * オーディエンス系セクションを読む。
  * @returns {null|{type:'total'|'ageGender'|'gender'|'cities'|'countries'}}
  */
+/**
+ * Meta Business Suite の「Top content formats」。
+ * 日付を持たず、書き出した期間の合計を「形式ごと」に並べた表が3つ入っている。
+ *   "Published content" → Photos / Reels / Stories（投稿した本数）
+ *   "Views"             → Links / Others / Reels / Multi media / Multi photo（ビュー）
+ *   "Content interactions" → 形式ごとの反応数
+ * 3つとも見出しが1行・データが1行だけで、日付列が無いのが特徴。
+ */
+const FORMAT_SECTIONS = {
+  published: ['publishedcontent', 'content', '公開したコンテンツ', '投稿したコンテンツ', 'コンテンツ'],
+  views: ['views', 'ビュー', 'ビュー数', '閲覧数'],
+  interactions: ['contentinteractions', 'interactions', 'コンテンツのインタラクション', 'インタラクション', '反応数'],
+};
+
+/** 形式名の日本語表記。一覧にないものはそのまま出す */
+const FORMAT_LABELS = {
+  photos: '写真', photo: '写真', reels: 'リール', reel: 'リール', stories: 'ストーリーズ', story: 'ストーリーズ',
+  links: 'リンク', others: 'その他', other: 'その他', multimedia: '複数メディア', multiphoto: '複数写真',
+  carousel: 'カルーセル', videos: '動画', video: '動画', text: 'テキスト', posts: '投稿', lives: 'ライブ',
+};
+
+export const formatLabel = (name) => FORMAT_LABELS[norm(name)] || String(name).trim();
+
+/**
+ * 「形式ごとの1行だけの表」を読む。日付列があるセクションは対象外。
+ * @returns {null|{kind:'published'|'views'|'interactions', rows:{key:string,label:string,value:number}[]}}
+ */
+export function readFormatSection(section, titles) {
+  const nonEmpty = section.filter((r) => r.some((f) => f.trim() !== ''));
+  // 「表題 → 見出し行 → 数値行」の3行の形だけを受け付ける
+  const headerIdx = nonEmpty.findIndex((r) => r.filter((f) => f.trim() !== '').length >= 2);
+  if (headerIdx < 0 || nonEmpty.length !== headerIdx + 2) return null;
+  const header = nonEmpty[headerIdx].filter((f) => f.trim() !== '');
+  const body = nonEmpty[headerIdx + 1];
+  if (header.length < 2) return null;
+  // 日付の入った表（Reach.csv など）は別の経路で読む
+  const isDateHead = (h) => [...ALIASES.date, ...ALIASES.timestamp].some((a) => norm(a) === norm(h));
+  if (header.some(isDateHead)) return null;
+  // 値がすべて数値でなければ、この形ではない
+  const values = header.map((_, i) => toNumber(body[i]));
+  if (values.some((v) => v === null)) return null;
+
+  const labels = [...titles, ...nonEmpty.slice(0, headerIdx).map((r) => r.find((f) => f.trim() !== ''))].filter(Boolean);
+  const kind = Object.keys(FORMAT_SECTIONS).find((k) => labels.some((t) => FORMAT_SECTIONS[k].some((a) => norm(a) === norm(t))));
+  if (!kind) return null;
+
+  return {
+    kind,
+    rows: header.map((h, i) => ({ key: norm(h), label: formatLabel(h), value: values[i] })),
+  };
+}
+
 function readAudience(section, titles) {
   const nonEmpty = section.filter((r) => r.some((f) => f.trim() !== ''));
   if (!nonEmpty.length) return null;
@@ -378,10 +433,12 @@ function readAudience(section, titles) {
  */
 export function importCSV(text, { fileName = '' } = {}) {
   const rows = parseCSV(text, { keepEmpty: true });
-  if (!rows.some((r) => r.some((f) => f.trim() !== ''))) throw new Error('データ行がありません');
+  if (!rows.some((r) => r.some((f) => f.trim() !== ''))) {
+    throw new Error('書き出しの中身が空です。Meta 側でその期間のデータが出力されていないため、期間を変えて書き出し直してください。');
+  }
 
   const fileHint = matchMetric(String(fileName).replace(/\.[a-z0-9]+$/i, ''));
-  const out = { posts: [], daily: [], audience: null, notes: [], kinds: [] };
+  const out = { posts: [], daily: [], audience: null, contentFormats: null, notes: [], kinds: [] };
   const addAudience = (patch) => (out.audience = { ...(out.audience || {}), ...patch });
   const unknownMetric = []; // 日付列はあるが指標名が分からなかったセクション
   const unknownShape = []; // そもそも形が分からなかったセクション
@@ -430,7 +487,15 @@ export function importCSV(text, { fileName = '' } = {}) {
       }
     }
 
-    // 4) オーディエンス（フォロワー総数・年齢×性別・上位の都市／国）
+    // 4) 形式ごとの内訳（Top content formats：日付を持たない1行だけの表）
+    const fmt = readFormatSection(section, titles);
+    if (fmt) {
+      out.contentFormats = { ...(out.contentFormats || {}), [fmt.kind]: fmt.rows };
+      out.kinds.push(`format:${fmt.kind}`);
+      continue;
+    }
+
+    // 5) オーディエンス（フォロワー総数・年齢×性別・上位の都市／国）
     const aud = readAudience(section, titles);
     if (aud) {
       if (aud.type === 'total') addAudience({ followersTotal: aud.value });
@@ -444,7 +509,7 @@ export function importCSV(text, { fileName = '' } = {}) {
     if (titles.length || section.length > 1) unknownShape.push(titles[0] || '（表題なし）');
   }
 
-  if (!out.posts.length && !out.daily.length && !out.audience) {
+  if (!out.posts.length && !out.daily.length && !out.audience && !out.contentFormats) {
     throw new Error(
       unknownMetric.length
         ? `指標を判別できませんでした（${unknownMetric.slice(0, 3).join('・')}）。Meta のエクスポートはファイル名（Reach.csv など）でも判別するため、名前を変えずに読み込んでください。`
@@ -470,6 +535,10 @@ const KIND_LABELS = {
   interactions: 'コンテンツインタラクション',
   engagedAccounts: 'エンゲージメントアカウント',
   nonFollowerReach: 'フォロワー以外へのリーチ',
+  viewers: '閲覧者数',
+  'format:published': '形式別の投稿数',
+  'format:views': '形式別のビュー',
+  'format:interactions': '形式別の反応数',
   'audience:total': 'フォロワー総数',
   'audience:ageGender': '年齢×性別',
   'audience:gender': '性別',
@@ -484,6 +553,15 @@ export function describeImport(result) {
   if (result.daily.length) counts.push(`日次 ${new Set(result.daily.map((d) => d.date)).size}日分`);
   const detail = labels.filter((l) => l !== '投稿' && l !== '日次');
   return [counts.join(' / '), detail.length ? `（${detail.join('・')}）` : ''].filter(Boolean).join('');
+}
+
+/**
+ * 形式別の内訳のマージ。期間全体の集計なので足さずに置き換える。
+ * 新しい書き出しに無いセクションは前のものを残す。
+ */
+export function mergeContentFormats(oldFormats, newFormats) {
+  if (!newFormats) return oldFormats || null;
+  return { ...(oldFormats || {}), ...newFormats };
 }
 
 export function toCSV(rows, columns) {

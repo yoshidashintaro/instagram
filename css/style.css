@@ -435,3 +435,29 @@ dialog.dlg-wide { width: min(860px, calc(100vw - 32px)); overflow: auto; }
   .topbar-actions, .filters .segmented, .table-tools, .view-toggle, .kpi-trend, #trend-back { display: none; }
   .card { break-inside: avoid; }
 }
+
+/* ===== KPI ツリー ===== */
+.stage-funnel { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.stage-funnel li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: baseline; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.stage-funnel .st-name { font-weight: 600; font-size: 13px; }
+.stage-funnel .st-value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+.stage-funnel .st-metric { grid-column: 1; font-size: 12px; color: var(--text-secondary); }
+.stage-funnel .st-rate { grid-column: 2; font-size: 12px; color: var(--text-secondary); text-align: right; white-space: nowrap; }
+.stage-funnel .st-note { grid-column: 1 / -1; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+.kgi-box { text-align: center; padding: 8px 0 4px; }
+.kgi-box .kgi-value { font-size: 34px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.kgi-box .kgi-unit { font-size: 13px; color: var(--text-secondary); margin-left: 4px; font-weight: 500; }
+.kgi-box .kgi-sub { font-size: 12px; color: var(--text-secondary); margin-top: 6px; }
+
+.goal-bar { position: relative; height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; min-width: 90px; }
+.goal-bar span { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--series-1); }
+.goal-bar.reached span { background: var(--good-bg); }
+.goal-bar.behind span { background: var(--series-neg); }
+.kpi-status { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+.kpi-status.reached { background: var(--good-bg); color: #fff; }
+.kpi-status.onTrack { background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border); }
+.kpi-status.behind { background: var(--warn-bg); color: #0b0b0b; }
+.kpi-status.none { background: var(--surface-2); color: var(--text-muted); }
+.kpi-stage-row td { background: var(--surface-2); font-weight: 600; font-size: 12px; color: var(--text-secondary); }
+#kpi-table input[type="number"] { width: 84px; padding: 2px 6px; font: inherit; font-size: 12px; text-align: right; }

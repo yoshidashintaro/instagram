@@ -34,6 +34,7 @@ export function readCorrelation(c) {
 }
 
 const LEVELS = { good: '好調', warn: '要注意', info: '参考' };
+const STAGE_LABELS = { kgi: 'KGI', see: '見る（認知）', keep: '残す（興味）', connect: 'つながる（関係化）', bridge: 'HPへ（橋渡し）' };
 const SOURCES = { demo: 'デモデータ', csv: 'CSV 取り込み', api: 'Instagram API' };
 
 /**
@@ -115,6 +116,53 @@ export function buildReport(v, { dataset = {}, settings = {}, warnings = [], gen
   table(['指標', 'この期間', '前期間', '増減'], kpi);
 
   // ---------- 自動分析 ----------
+  // ---------- KPI ツリー ----------
+  const tree = v.kpi;
+  if (tree?.rows?.length) {
+    const fmtKpi = (r, value) =>
+      value === null || value === undefined
+        ? '–'
+        : r.unit === '%'
+          ? `${value.toFixed(r.digits ?? 1)}%`
+          : `${r.digits ? value.toFixed(r.digits) : Math.round(value).toLocaleString('ja-JP')}${r.unit}`;
+    const statusLabel = { reached: '目標達成', onTrack: '基準以上', behind: '基準割れ', none: 'データなし' };
+
+    h(2, 'KPI ツリー（目標に対する進捗）');
+    p(
+      `運用で決めた指標の定義・基準・目標に対する進捗です。期間の合計を月あたり（${tree.days}日間 → 30.4日ぶん）に換算して比べています。率の指標は換算していません。`,
+    );
+    table(
+      ['区分', '指標', '定義', '実績（月あたり）', '基準', '目標', '達成率', '状態'],
+      tree.rows.map((r) => [
+        STAGE_LABELS[r.stage] || r.stage,
+        r.label,
+        r.def,
+        fmtKpi(r, r.monthly),
+        fmtKpi(r, r.baseline),
+        `${fmtKpi(r, r.target)}${r.targetNote ? `（${r.targetNote}）` : ''}`,
+        r.progress === null ? '–' : `${Math.round(r.progress)}%`,
+        statusLabel[r.status],
+      ]),
+      ['l', 'l', 'l', 'r', 'r', 'r', 'r', 'l'],
+    );
+
+    if (tree.funnel?.length) {
+      h(3, '見る → 残す → つながる → HPへ');
+      p('投稿を見た人がたどる4段階です。各段階の代表の数字と、1つ前の段階からの通過率を出しています。');
+      table(
+        ['段階', '指標', '実績', '1つ前からの通過率', '補足'],
+        tree.funnel.map((s2) => [
+          s2.label,
+          s2.metric,
+          s2.value === null ? '–' : `${Math.round(s2.value).toLocaleString('ja-JP')}${s2.unit}`,
+          s2.rate === null ? '–' : `${s2.fromLabel}の ${fmtPct(s2.rate, 1)}`,
+          s2.note || '',
+        ]),
+        ['l', 'l', 'r', 'r', 'l'],
+      );
+    }
+  }
+
   h(2, '自動分析レポート');
   const insights = [...v.insights, ...(v.traffic?.insights || [])];
   if (insights.length) list(insights.map((i) => `【${LEVELS[i.level] || i.level}】${i.title}：${i.text}`));
@@ -310,6 +358,24 @@ export function buildReport(v, { dataset = {}, settings = {}, warnings = [], gen
   if (v.weekdays.some((x) => x.n)) {
     h(3, '曜日別 平均ER');
     table(['曜日', '投稿数', '平均ER'], v.weekdays.filter((x) => x.n).map((x) => [`${WEEKDAYS[x.key]}曜日`, fmtInt(x.n), fmtPct(x.mean)]));
+  }
+
+  // ---------- 形式別の内訳（Top content formats） ----------
+  const fm = v.formats;
+  if (fm && (fm.views?.length || fm.published?.length || fm.interactions?.length)) {
+    h(2, '形式別の内訳（Top content formats）');
+    p('Meta Business Suite の「Top content formats」の書き出しです。日付を持たない期間合計のため、上の期間フィルタの対象外です。');
+    const keys = [...new Set(['published', 'views', 'interactions'].flatMap((k) => (fm[k] || []).map((r) => r.key)))];
+    const labelOf = (key) => ['published', 'views', 'interactions'].map((k) => (fm[k] || []).find((r) => r.key === key)?.label).find(Boolean) || key;
+    const valueOf = (k, key) => (fm[k] || []).find((r) => r.key === key)?.value ?? null;
+    table(
+      ['形式', '投稿数', 'ビュー', '反応数', '反応率'],
+      keys.map((key) => {
+        const views = valueOf('views', key);
+        const acts = valueOf('interactions', key);
+        return [labelOf(key), fmtInt(valueOf('published', key)), fmtInt(views), fmtInt(acts), views && acts !== null ? fmtPct((acts / views) * 100, 3) : '–'];
+      }),
+    );
   }
 
   // ---------- Google 検索（Search Console） ----------

@@ -6,13 +6,18 @@ import { norm } from './csv.js';
 const ALIASES = {
   fetchedAt: ['取得日', 'fetchedat', 'fetcheddate'],
   account: ['アカウント', 'account', 'username', 'accountusername', 'ユーザーネーム'],
-  period: ['期間', 'period', '対象期間'],
+  period: ['期間', '集計期間', '対象期間', 'period', 'daterange'],
   start: ['開始日', 'start', 'startdate', 'since', '期間開始'],
   end: ['終了日', 'end', 'enddate', 'until', '期間終了'],
   total: ['instagramリーチ合計', 'リーチ合計', 'リーチ', 'totalreach', 'reach', 'instagramreach'],
   followers: ['fromfollowers', 'followers', 'フォロワー', 'フォロワーから', 'フォロワーへのリーチ', 'followerreach'],
   nonFollowers: ['fromnonfollowers', 'nonfollowers', '非フォロワー', 'フォロワー以外', 'フォロワー以外から', 'フォロワー以外へのリーチ', 'nonfollowerreach'],
   ratio: ['非フォロワー比率', 'フォロワー以外の割合', 'nonfollowerratio', 'nonfollowershare', 'nonfollowers%', '非フォロワー率'],
+  // オーガニック／広告の内訳（書き出しに入っていれば読む）
+  organic: ['fromorganic', 'organic', 'オーガニック', 'オーガニックから', 'organicreach', 'オーガニックリーチ'],
+  ads: ['fromads', 'ads', 'paid', '広告', '広告から', 'adreach', 'adsreach', '広告リーチ'],
+  adRatio: ['広告比率', '広告の割合', 'adratio', 'adshare', 'ads%', '広告率'],
+  source: ['取得元', 'source', 'データ元', '出典'],
 };
 
 function mapHeader(header) {
@@ -69,6 +74,9 @@ export function readReachBreakdown(rows) {
       const followers = col.followers === undefined ? null : toNumber(r[col.followers]);
       const total = col.total === undefined ? null : toNumber(r[col.total]);
       const fileRatio = col.ratio === undefined ? null : toNumber(r[col.ratio]);
+      const organic = col.organic === undefined ? null : toNumber(r[col.organic]);
+      const ads = col.ads === undefined ? null : toNumber(r[col.ads]);
+      const fileAdRatio = col.adRatio === undefined ? null : toNumber(r[col.adRatio]);
       const ratio =
         fileRatio !== null ? fileRatio
           : followers !== null && followers + nonFollowers > 0 ? (nonFollowers / (followers + nonFollowers)) * 100
@@ -83,12 +91,30 @@ export function readReachBreakdown(rows) {
         followers,
         nonFollowers,
         ratio, // %（0〜100）
+        // オーガニック／広告の内訳。広告比率は列があればそれを、無ければ 広告 ÷（オーガニック＋広告）で出す
+        organic,
+        ads,
+        adRatio:
+          fileAdRatio !== null ? fileAdRatio
+            : organic !== null && ads !== null && organic + ads > 0 ? (ads / (organic + ads)) * 100
+              : null,
         fetchedAt: col.fetchedAt === undefined ? null : oneDate(r[col.fetchedAt]),
+        source: col.source === undefined ? '' : String(r[col.source] ?? '').trim(),
       });
     }
     return out.length ? out : null;
   }
   return null;
+}
+
+/**
+ * 取り込んだリーチ内訳が1つのアカウントのものだけなら、そのアカウント名を返す。
+ * 日次データ（アカウント全体の数字）にはアカウント名が入っていないため、
+ * 投稿に別アカウントが混ざっていても、内訳の持ち主を取り違えないようにする。
+ */
+export function soleAccount(breakdowns = []) {
+  const names = [...new Set(breakdowns.map((b) => b.account).filter(Boolean))];
+  return names.length === 1 ? names[0] : '';
 }
 
 /** 同じアカウント・同じ期間は新しい方で上書き */
@@ -141,5 +167,9 @@ export function applyNonFollowerEstimate({ posts = [], daily = [] }, breakdowns,
 
 /** 画面の注意書き用：どの期間の比率を使ったか */
 export function describeBreakdowns(breakdowns) {
-  return (breakdowns || []).map((b) => `${b.account ? `@${b.account} ` : ''}${b.start.replaceAll('-', '/')}〜${b.end.replaceAll('-', '/')} の非フォロワー比率 ${b.ratio.toFixed(1)}%`);
+  return (breakdowns || []).map(
+    (b) =>
+      `${b.account ? `@${b.account} ` : ''}${b.start.replaceAll('-', '/')}〜${b.end.replaceAll('-', '/')} の非フォロワー比率 ${b.ratio.toFixed(1)}%` +
+      (b.adRatio === null || b.adRatio === undefined ? '' : `・広告比率 ${b.adRatio.toFixed(1)}%`),
+  );
 }

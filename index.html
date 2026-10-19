@@ -186,6 +186,39 @@
         <ul class="insights" id="insights"></ul>
       </section>
 
+      <!-- KPI ツリー -->
+      <section class="block" id="kpi-block">
+        <div class="block-head">
+          <h2>KPI ツリー（目標に対する進捗）</h2>
+          <p id="kpi-lead"></p>
+        </div>
+
+        <div class="grid-2-1">
+          <article class="card" id="kpi-funnel-card">
+            <header><div><h3>見る → 残す → つながる → HPへ</h3><p class="sub">投稿を見た人がたどる4段階。各段階の代表の数字と、1つ前からの通過率</p></div></header>
+            <ol class="stage-funnel" id="kpi-funnel"></ol>
+          </article>
+          <article class="card" id="kpi-kgi-card">
+            <header><div><h3>KGI</h3><p class="sub">興味関心層の獲得数（保存数＋フォロワー純増）</p></div></header>
+            <div id="kpi-kgi"></div>
+          </article>
+        </div>
+
+        <article class="card">
+          <header>
+            <div><h3>指標ごとの進捗</h3><p class="sub" id="kpi-table-sub"></p></div>
+            <div class="card-actions">
+              <button class="btn small" type="button" id="kpi-edit" aria-pressed="false">基準・目標を編集</button>
+              <button class="btn small" type="button" id="export-kpi">CSV 出力</button>
+            </div>
+          </header>
+          <div class="table-wrap">
+            <table class="data-table" id="kpi-table"><thead></thead><tbody></tbody></table>
+          </div>
+          <p class="help small" id="kpi-note"></p>
+        </article>
+      </section>
+
       <!-- フォロワー -->
       <section class="block">
         <div class="block-head"><h2>フォロワーの増減</h2></div>
@@ -237,6 +270,19 @@
           <header><div><h3>プロフィールからのアクション</h3><p class="sub">期間合計。ウェブサイト・電話・メッセージなど、押された種類ごとの件数</p></div></header>
           <div class="chart h-220"><canvas id="c-clicks" role="img" aria-label="プロフィールからのアクションの内訳"></canvas></div>
         </article>
+
+        <div class="grid-2" id="formats-row" hidden>
+          <article class="card" data-chart="c-formats-views">
+            <header><div><h3>形式別のビュー</h3><p class="sub" id="formats-sub"></p></div></header>
+            <div class="chart h-240"><canvas id="c-formats-views" role="img" aria-label="形式別のビュー"></canvas></div>
+          </article>
+          <article class="card">
+            <header><div><h3>形式別の投稿数と反応</h3><p class="sub">Top content formats の書き出し。日付を持たないため、期間フィルタの対象外です</p></div></header>
+            <div class="table-wrap">
+              <table class="data-table" id="formats-table"><thead></thead><tbody></tbody></table>
+            </div>
+          </article>
+        </div>
       </section>
 
       <!-- ストーリーズ -->
@@ -677,7 +723,7 @@
 
   <footer class="foot">
     データとアクセストークンはこのブラウザ内（localStorage）にのみ保存され、Instagram Graph API 以外へは送信されません。
-    <span class="build">版: <span id="build-stamp">2026/10/19 16:07</span></span>
+    <span class="build">版: <span id="build-stamp">2026/10/19 19:16</span></span>
   </footer>
 
   <!-- データ接続ダイアログ -->
